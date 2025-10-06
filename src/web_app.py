@@ -21,8 +21,10 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from io import BytesIO
 
 # Initialize Flask app
-app = Flask(__name__)
+app = Flask(__name__, template_folder='../templates', static_folder='../templates')
 CORS(app)
+
+# Static file routes are defined later in the file
 
 # Configuration
 app.config['UPLOAD_FOLDER'] = 'temp'
@@ -69,12 +71,12 @@ def index():
 @app.route('/styles/<path:filename>')
 def styles(filename):
     """Serve CSS files"""
-    return send_from_directory('templates/styles', filename)
+    return send_from_directory('../templates/styles', filename)
 
 @app.route('/scripts/<path:filename>')
 def serve_scripts(filename):
     """Serve JavaScript files"""
-    return send_from_directory('templates/scripts', filename)
+    return send_from_directory('../templates/scripts', filename)
 
 @app.route('/api/files', methods=['GET'])
 def get_all_files():
