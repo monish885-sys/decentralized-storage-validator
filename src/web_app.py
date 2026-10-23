@@ -27,7 +27,9 @@ CORS(app)
 # Static file routes are defined later in the file
 
 # Configuration
-app.config['UPLOAD_FOLDER'] = 'temp'
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'temp')
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Ensure temp directory exists
@@ -35,21 +37,42 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # Google Drive configuration
 SCOPES = ['https://www.googleapis.com/auth/drive']
-TOKEN_FILE = 'token.json'
+TOKEN_FILE = os.path.join(BASE_DIR, 'token.json')
+CLIENT_SECRET_FILE = os.path.join(BASE_DIR, 'client_secret.json')
 
 def get_drive_service():
     """Get authenticated Google Drive service"""
     creds = None
     if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        except Exception as e:
+            print(f"⚠️ Error loading token file: {e}")
+            creds = None
     
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+                print("✅ Token refreshed successfully")
+            except Exception as e:
+                print(f"⚠️ Token refresh failed: {e}")
+                print("🔄 Re-authenticating...")
+                # Delete invalid token and re-authenticate
+                if os.path.exists(TOKEN_FILE):
+                    os.remove(TOKEN_FILE)
+                creds = None
+        
+        if not creds:
+            # Re-authenticate if no valid credentials
+            if not os.path.exists(CLIENT_SECRET_FILE):
+                raise FileNotFoundError(f"Client secret file not found: {CLIENT_SECRET_FILE}")
             flow = InstalledAppFlow.from_client_secrets_file(
-                'client_secret.json', SCOPES)
+                CLIENT_SECRET_FILE, SCOPES)
             creds = flow.run_local_server(port=8081, open_browser=False)
+            print("✅ Re-authentication successful")
+        
+        # Save credentials
         with open(TOKEN_FILE, 'w') as token:
             token.write(creds.to_json())
     
@@ -71,12 +94,14 @@ def index():
 @app.route('/styles/<path:filename>')
 def styles(filename):
     """Serve CSS files"""
-    return send_from_directory('../templates/styles', filename)
+    styles_dir = os.path.join(BASE_DIR, 'templates', 'styles')
+    return send_from_directory(styles_dir, filename)
 
 @app.route('/scripts/<path:filename>')
 def serve_scripts(filename):
     """Serve JavaScript files"""
-    return send_from_directory('../templates/scripts', filename)
+    scripts_dir = os.path.join(BASE_DIR, 'templates', 'scripts')
+    return send_from_directory(scripts_dir, filename)
 
 @app.route('/api/files', methods=['GET'])
 def get_all_files():
@@ -109,6 +134,7 @@ def get_all_files():
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
     """Upload a file to Google Drive and store hash in MongoDB"""
+    filepath = None
     try:
         if 'file' not in request.files:
             return jsonify({
@@ -130,9 +156,12 @@ def upload_file():
             
             try:
                 # Compute hash
+                print(f"📝 Computing hash for {filename}...")
                 file_hash = compute_file_hash(filepath)
+                print(f"✅ Hash computed: {file_hash[:16]}...")
                 
                 # Upload to Google Drive
+                print(f"☁️ Uploading {filename} to Google Drive...")
                 service = get_drive_service()
                 file_metadata = {'name': filename}
                 media = MediaFileUpload(filepath, resumable=True)
@@ -145,15 +174,18 @@ def upload_file():
                 
                 file_id = drive_file.get('id')
                 file_size = os.path.getsize(filepath)
+                print(f"✅ File uploaded to Drive. ID: {file_id}")
                 
                 # Store in MongoDB
+                print(f"💾 Storing metadata in MongoDB...")
                 storage = mongodb_storage.MongoDBStorage()
                 storage.store_file_hash(filename, file_hash, file_id, file_size)
+                storage.close_connection()
+                print(f"✅ Metadata stored successfully")
                 
                 # Clean up temp file
-                os.remove(filepath)
-                
-                storage.close_connection()
+                if os.path.exists(filepath):
+                    os.remove(filepath)
                 
                 return jsonify({
                     'success': True,
@@ -168,15 +200,20 @@ def upload_file():
                 })
                 
             except Exception as e:
+                print(f"❌ Error during upload process: {e}")
+                import traceback
+                traceback.print_exc()
                 # Clean up temp file on error
-                if os.path.exists(filepath):
+                if filepath and os.path.exists(filepath):
                     os.remove(filepath)
                 raise e
 
     except Exception as e:
+        error_msg = str(e)
+        print(f"❌ Upload failed: {error_msg}")
         return jsonify({
             'success': False,
-            'error': f'Upload failed: {str(e)}'
+            'error': f'Upload failed: {error_msg}'
         }), 500
 
 @app.route('/api/verify/<filename>', methods=['GET'])

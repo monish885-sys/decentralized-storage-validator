@@ -256,24 +256,52 @@ async function uploadFile(file) {
         });
 
         xhr.addEventListener('load', function() {
+            hideLoading();
             if (xhr.status === 200) {
-                const response = JSON.parse(xhr.responseText);
-                showUploadResult(true, response.data);
-                refreshFiles();
-                loadStats();
-                
-                // Reset file input
-                if (fileInput) fileInput.value = '';
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    if (response.success) {
+                        showUploadResult(true, response.data);
+                        refreshFiles();
+                        loadStats();
+                        
+                        // Reset file input
+                        if (fileInput) fileInput.value = '';
+                    } else {
+                        throw new Error(response.error || 'Upload failed');
+                    }
+                } catch (e) {
+                    hideUploadProgress();
+                    showNotification('Upload failed: ' + (e.message || 'Unknown error'), 'error');
+                }
             } else {
-                const error = JSON.parse(xhr.responseText);
-                throw new Error(error.error || 'Upload failed');
+                try {
+                    const error = JSON.parse(xhr.responseText);
+                    hideUploadProgress();
+                    showNotification('Upload failed: ' + (error.error || 'Server error'), 'error');
+                } catch (e) {
+                    hideUploadProgress();
+                    showNotification('Upload failed: Server returned ' + xhr.status, 'error');
+                }
             }
         });
 
         xhr.addEventListener('error', function() {
-            throw new Error('Upload failed');
+            hideLoading();
+            hideUploadProgress();
+            showNotification('Upload failed: Network error', 'error');
         });
 
+        xhr.addEventListener('timeout', function() {
+            hideLoading();
+            hideUploadProgress();
+            xhr.abort();
+            showNotification('Upload failed: Request timeout', 'error');
+        });
+
+        // Set timeout to 5 minutes for large files
+        xhr.timeout = 300000; // 5 minutes
+        
         xhr.open('POST', '/api/upload');
         xhr.send(formData);
 
